@@ -78,8 +78,8 @@
         Slider:
             id: rampSpeed
             orientation: 'horizontal'
-            min: 10
-            max: 200
+            min: 2
+            max: 10
             value: root.rampSpeed
             step: 1
             center_x: root.width * 0.6
@@ -129,12 +129,3 @@
             center_x: root.width * 0.20
             y: root.height * 0.05
             color: 0.8, 0.8, 0.8, 1
-
-        Label:
-            id: armControlLabel
-            text: 'Firmware Version: ' + str(root.version)
-            font_size: 20
-            center_x: root.width * 0.9
-            y: root.height * 0.02
-            color: 0.8, 0.8, 0.8, 1
-

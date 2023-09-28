@@ -1,7 +1,6 @@
 # ////////////////////////////////////////////////////////////////
 # //                     IMPORT STATEMENTS                      //
 # ////////////////////////////////////////////////////////////////
-
 import math
 import sys
 import time
@@ -28,10 +27,20 @@ from kivy.core.window import Window
 from pidev.kivy import DPEAButton
 from pidev.kivy import PauseScreen
 from time import sleep
-import RPi.GPIO as GPIO 
-from pidev.stepper import stepper
-from pidev.Cyprus_Commands import Cyprus_Commands_RPi as cyprus
+from dpeaDPi.DPiComputer import *
+from dpeaDPi.DPiStepper import *
+from dpeaDPi.DPiComputer import DPiComputer
 
+# ////////////////////////////////////////////////////////////////
+# //                     HARDWARE SETUP                         //
+# ////////////////////////////////////////////////////////////////
+"""Stepper Motor goes into MOTOR 0 )
+    Limit Switch associated with Stepper Motor goes into HOME 0
+    One Sensor goes into IN 0
+    Another Sensor goes into IN 1
+    Servo Motor associated with the Gate goes into SERVO 1
+    Motor Controller for DC Motor associated with the Stairs goes into SERVO 0"""
+stepper_motor = 0
 
 # ////////////////////////////////////////////////////////////////
 # //                      GLOBAL VARIABLES                      //
@@ -59,23 +68,21 @@ class MyApp(App):
         self.title = "Perpetual Motion"
         return sm
 
-Builder.load_file('main.kv')
-Window.clearcolor = (.1, .1,.1, 1) # (WHITE)
 
-cyprus.open_spi()
+Builder.load_file('main.kv')
+Window.clearcolor = (.1, .1, .1, 1)  # (WHITE)
 
 # ////////////////////////////////////////////////////////////////
 # //                    SLUSH/HARDWARE SETUP                    //
 # ////////////////////////////////////////////////////////////////
 sm = ScreenManager()
-ramp = stepper(port=0, micro_steps=32, hold_current=20, run_current=20, accel_current=20, deaccel_current=20,
-             steps_per_unit=200, speed=INIT_RAMP_SPEED)
+
 
 # ////////////////////////////////////////////////////////////////
 # //                       MAIN FUNCTIONS                       //
 # //             SHOULD INTERACT DIRECTLY WITH HARDWARE         //
 # ////////////////////////////////////////////////////////////////
-	
+
 # ////////////////////////////////////////////////////////////////
 # //        DEFINE MAINSCREEN CLASS THAT KIVY RECOGNIZES        //
 # //                                                            //
@@ -86,33 +93,68 @@ ramp = stepper(port=0, micro_steps=32, hold_current=20, run_current=20, accel_cu
 # //      SHOULD NOT INTERACT DIRECTLY WITH THE HARDWARE        //
 # ////////////////////////////////////////////////////////////////
 class MainScreen(Screen):
-    version = cyprus.read_firmware_version()
     staircaseSpeedText = '0'
     rampSpeed = INIT_RAMP_SPEED
     staircaseSpeed = 40
+    dpiStepper = DPiStepper()
+    dpiStepper.setBoardNumber(0)
+    if dpiStepper.initialize() != True:
+        print("Communication with the DPiStepper board failed.")
+
+    dpiStepper.enableMotors(True)
+    microstepping = 8
+    dpiStepper.setMicrostepping(microstepping)
+    speed_steps_per_second = 200 * microstepping
+    accel_steps_per_second_per_second = speed_steps_per_second
+    dpiStepper.setSpeedInStepsPerSecond(stepper_motor, speed_steps_per_second)
+    dpiStepper.setAccelerationInStepsPerSecondPerSecond(stepper_motor, accel_steps_per_second_per_second)
+    dpiComputer = DPiComputer()
+    dpiComputer.initialize()
+    staircase = True
+    staircase_speed = 90
+    gate = False
+
 
     def __init__(self, **kwargs):
         super(MainScreen, self).__init__(**kwargs)
         self.initialize()
+        Clock.schedule_interval(self.debounce, .5)
 
     def toggleGate(self):
-        print("Open and Close gate here")
+        self.openGate()
 
     def toggleStaircase(self):
-        print("Turn on and off staircase here")
-        
+        self.moveStaircase()
+
     def toggleRamp(self):
-        print("Move ramp up and down here")
-        
+        #print("Move ramp up and down here")
+        self.moveRamp()
+
     def auto(self):
-        print("Run through one cycle of the perpetual motion machine")
-        
+        self.openGate()
+        sleep(0.5)
+        self.openGate()
+        there = False
+        while(there == False):
+            there = self.isBallAtTopOfRamp()
+        self.dpiComputer.writeServo(0, self.staircase_speed)
+        sleep(7)
+        self.dpiComputer.writeServo(0, 90)
+
     def setRampSpeed(self, speed):
-        print("Set the ramp speed and update slider text")
-        
+        self.speed_steps_per_second = 200 * self.microstepping * speed
+        self.accel_steps_per_second_per_second = self.speed_steps_per_second
+        self.dpiStepper.setSpeedInStepsPerSecond(stepper_motor, self.speed_steps_per_second)
+        self.dpiStepper.setAccelerationInStepsPerSecondPerSecond(stepper_motor, self.accel_steps_per_second_per_second)
+        self.ids.rampSpeed.text = 'Ramp Speed: ' + str(speed)
+
     def setStaircaseSpeed(self, speed):
-        print("Set the staircase speed and update slider text")
-        
+        math = 18 * (speed/10) + 90
+        self.staircase = math
+        print(self.staircase_speed)
+        self.ids.staircaseSpeed.text = 'Staircase Speed: ' + str(speed)
+
+
     def initialize(self):
         print("Close gate, stop staircase and home ramp here")
 
@@ -121,16 +163,55 @@ class MainScreen(Screen):
         self.ids.staircase.color = YELLOW
         self.ids.ramp.color = YELLOW
         self.ids.auto.color = BLUE
-    
+
     def quit(self):
         print("Exit")
         MyApp().stop()
 
-sm.add_widget(MainScreen(name = 'main'))
+    def debounce(self, dt):
+        if (self.dpiComputer.readDigitalIn(self.dpiComputer.IN_CONNECTOR__IN_0) == 0):
+            sleep(.05)
+            if (self.dpiComputer.readDigitalIn(self.dpiComputer.IN_CONNECTOR__IN_0) == 0):
+                self.moveRamp()
+        else:
+            return
+        # ok, it's really pressed
+
+    def moveRamp(self):
+        steps = 45500
+        wait_to_finish_moving_flg = True
+        self.dpiStepper.setSpeedInStepsPerSecond(0, self.speed_steps_per_second)
+        self.dpiStepper.setAccelerationInStepsPerSecondPerSecond(0, self.accel_steps_per_second_per_second)
+        self.dpiStepper.moveToRelativePositionInSteps(0, -steps, wait_to_finish_moving_flg)
+        self.dpiStepper.moveToHomeInSteps(0, 1, 10000, steps)
+        self.dpiStepper.setSpeedInStepsPerSecond(0, self.speed_steps_per_second)
+        self.dpiStepper.setAccelerationInStepsPerSecondPerSecond(0, self.accel_steps_per_second_per_second)
+        self.dpiStepper.moveToRelativePositionInSteps(0, 400, wait_to_finish_moving_flg)
+
+    def moveStaircase(self):
+        if self.staircase:
+            self.dpiComputer.writeServo(0, self.staircase_speed)
+            self.staircase = False
+        else:
+            self.dpiComputer.writeServo(0, self.staircase)
+            self.staircase = True
+
+    def openGate(self):
+        if self.gate == False:
+            self.dpiComputer.writeServo(1, 180)
+            self.gate = True
+        else:
+            self.dpiComputer.writeServo(1, 0)
+            self.gate = False
+
+    def isBallAtTopOfRamp(self):
+        return self.dpiComputer.readDigitalIn(1)
+
+
+sm.add_widget(MainScreen(name='main'))
 
 # ////////////////////////////////////////////////////////////////
 # //                          RUN APP                           //
 # ////////////////////////////////////////////////////////////////
 
 MyApp().run()
-cyprus.close_spi()
